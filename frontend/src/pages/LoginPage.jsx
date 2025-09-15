@@ -1,55 +1,138 @@
 import { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
-import { auth, googleProvider, facebookProvider } from "../firebase";
-import { signInWithPopup, onAuthStateChanged, signOut } from "firebase/auth";
+import { auth, googleProvider } from "../firebase";
+import {
+  signInWithPopup,
+  onAuthStateChanged,
+  signOut,
+  FacebookAuthProvider,
+  signInWithCredential,
+} from "firebase/auth";
 
+// =================== ENV & API ===================
 const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000").replace(/\/$/, "");
-const AUTH_URL = `${API_BASE}/api/auth/firebase`;
+const AUTH_URL = `${API_BASE}/api/auth/firebase`; // dùng chung cho Google & Facebook
+const FB_APP_ID = import.meta.env.VITE_FB_APP_ID || "711364211725720"; // đổi nếu cần
+
+// =================== helpers ===================
+async function authWithBackend(idToken, provider) {
+  const r = await fetch(AUTH_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${idToken}`,
+    },
+    body: JSON.stringify({ provider }),
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data?.message || "Backend auth failed");
+  if (data.token) localStorage.setItem("api_token", data.token);
+  return data;
+}
+
+// Load Facebook SDK only once
+function useFacebookSDK() {
+  const [fbReady, setFbReady] = useState(false);
+
+  useEffect(() => {
+    if (typeof window !== "undefined" && window.FB) {
+      setFbReady(true);
+      return;
+    }
+    window.fbAsyncInit = function () {
+      window.FB.init({
+        appId: FB_APP_ID,
+        cookie: true,
+        xfbml: false,
+        version: "v19.0",
+      });
+      setFbReady(true);
+    };
+    const id = "facebook-jssdk";
+    if (!document.getElementById(id)) {
+      const js = document.createElement("script");
+      js.id = id;
+      js.src = "https://connect.facebook.net/en_US/sdk.js";
+      document.body.appendChild(js);
+    }
+  }, []);
+
+  return fbReady;
+}
 
 export default function LoginPage() {
   const { t, i18n } = useTranslation();
   const [user, setUser] = useState(null);
   const [busy, setBusy] = useState(false);
+  const fbReady = useFacebookSDK();
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => setUser(u));
     return () => unsub();
   }, []);
 
-  async function authWithBackend(idToken, provider) {
-    const r = await fetch(AUTH_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${idToken}`,
-      },
-      body: JSON.stringify({ provider }),
-    });
-    const data = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(data?.message || "Backend auth failed");
-    if (data.token) localStorage.setItem("api_token", data.token);
-    return data;
-  }
-
-  const loginWithProvider = async (providerName) => {
+  // ============ GOOGLE (Firebase) ============
+  const loginWithGoogle = async () => {
     setBusy(true);
     try {
-      const provider = providerName === "google" ? googleProvider : facebookProvider;
-      const res = await signInWithPopup(auth, provider);
+      const res = await signInWithPopup(auth, googleProvider);
       const idToken = await res.user.getIdToken(true);
-      const data = await authWithBackend(idToken, providerName);
+      const data = await authWithBackend(idToken, "google");
       console.log("Account saved:", data.user ?? data.account ?? data);
-      alert(`${providerName} login OK`);
+      alert("Google login OK");
     } catch (e) {
       console.error(e);
-      alert(`${providerName} login failed`);
+      alert("Google login failed");
     } finally {
+      setBusy(false);
+    }
+  };
+
+  // ============ FACEBOOK (JS SDK -> Firebase credential -> ID Token) ============
+  const loginWithFacebookSDK = async () => {
+    if (!fbReady || !window.FB) {
+      alert("Facebook SDK chưa sẵn sàng, thử lại sau vài giây.");
+      return;
+    }
+    setBusy(true);
+    try {
+      window.FB.login(
+        async (response) => {
+          if (!response.authResponse) {
+            setBusy(false);
+            alert("Đăng nhập Facebook bị huỷ");
+            return;
+          }
+          try {
+            const accessToken = response.authResponse.accessToken;
+
+            // bắc cầu sang Firebase để lấy Firebase ID Token
+            const cred = FacebookAuthProvider.credential(accessToken);
+            const res = await signInWithCredential(auth, cred);
+
+            const idToken = await res.user.getIdToken(true);
+            const data = await authWithBackend(idToken, "facebook");
+            console.log("Account saved:", data.user ?? data.account ?? data);
+            alert("Facebook login OK");
+          } catch (err) {
+            console.error("Lỗi xác thực qua Firebase:", err);
+            alert("Facebook login failed");
+          } finally {
+            setBusy(false);
+          }
+        },
+        { scope: "email,public_profile" }
+      );
+    } catch (e) {
+      console.error(e);
+      alert("Facebook login failed");
       setBusy(false);
     }
   };
 
   const logout = async () => {
     localStorage.removeItem("api_token");
+    localStorage.removeItem("user");
     await signOut(auth);
   };
 
@@ -82,17 +165,21 @@ export default function LoginPage() {
           </div>
         ) : (
           <div className="space-y-3">
+            {/* GOOGLE */}
             <button
-              onClick={() => loginWithProvider("google")}
+              onClick={loginWithGoogle}
               disabled={busy}
               className="w-full rounded-lg bg-red-500 text-white px-4 py-2"
             >
               {busy ? t("loading") : t("google")}
             </button>
+
+            {/* FACEBOOK (giữ SDK, gửi như Google) */}
             <button
-              onClick={() => loginWithProvider("facebook")}
-              disabled={busy}
-              className="w-full rounded-lg bg-blue-600 text-white px-4 py-2"
+              onClick={loginWithFacebookSDK}
+              disabled={busy || !fbReady}
+              className="w-full rounded-lg bg-blue-600 text-white px-4 py-2 disabled:opacity-60"
+              title={fbReady ? "" : "Đang tải Facebook SDK..."}
             >
               {busy ? t("loading") : t("facebook")}
             </button>
