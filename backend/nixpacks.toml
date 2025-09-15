@@ -1,0 +1,20 @@
+providers = ["php"]  # PHP-only, không kéo Node
+
+[phases.setup]
+nixPkgs = ["php", "phpPackages.composer", "libmysqlclient"]
+
+[phases.install]
+cmds = [
+  "composer install --no-dev --prefer-dist --optimize-autoloader --ignore-platform-reqs"
+]
+
+[phases.build]
+cmds = [
+  "php artisan config:cache || true",
+  "php artisan route:cache || true",
+  "php artisan view:cache || true"
+]
+
+[start]
+# chạy PHP built-in server, serve thư mục public
+cmd = "php -S 0.0.0.0:$PORT -t public public/index.php"
