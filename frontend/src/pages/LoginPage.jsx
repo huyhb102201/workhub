@@ -1,17 +1,12 @@
 import { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { auth, googleProvider } from "../firebase";
-import {
-  signInWithPopup,
-  onAuthStateChanged,
-  signOut,
-  FacebookAuthProvider,
-  signInWithCredential,
-} from "firebase/auth";
+import { signInWithPopup, onAuthStateChanged, signOut } from "firebase/auth";
 
 // =================== ENV & API ===================
 const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000").replace(/\/$/, "");
-const AUTH_URL = `${API_BASE}/api/auth/firebase`; // dùng chung cho Google & Facebook
+const AUTH_URL = `${API_BASE}/api/auth/firebase`; // Google -> Laravel verify Firebase ID token
+const SAVE_USER_URL = `${API_BASE}/api/save-user`; // Facebook SDK -> lưu user
 const FB_APP_ID = import.meta.env.VITE_FB_APP_ID || "711364211725720"; // đổi nếu cần
 
 // =================== helpers ===================
@@ -35,10 +30,13 @@ function useFacebookSDK() {
   const [fbReady, setFbReady] = useState(false);
 
   useEffect(() => {
+    // If already loaded
     if (typeof window !== "undefined" && window.FB) {
       setFbReady(true);
       return;
     }
+
+    // Prepare init callback
     window.fbAsyncInit = function () {
       window.FB.init({
         appId: FB_APP_ID,
@@ -48,6 +46,8 @@ function useFacebookSDK() {
       });
       setFbReady(true);
     };
+
+    // Inject script
     const id = "facebook-jssdk";
     if (!document.getElementById(id)) {
       const js = document.createElement("script");
@@ -55,6 +55,10 @@ function useFacebookSDK() {
       js.src = "https://connect.facebook.net/en_US/sdk.js";
       document.body.appendChild(js);
     }
+
+    return () => {
+      // không cần cleanup đặc biệt cho FB SDK
+    };
   }, []);
 
   return fbReady;
@@ -88,47 +92,66 @@ export default function LoginPage() {
     }
   };
 
-  // ============ FACEBOOK (JS SDK -> Firebase credential -> ID Token) ============
-  const loginWithFacebookSDK = async () => {
-    if (!fbReady || !window.FB) {
-      alert("Facebook SDK chưa sẵn sàng, thử lại sau vài giây.");
-      return;
-    }
-    setBusy(true);
-    try {
-      window.FB.login(
-        async (response) => {
-          if (!response.authResponse) {
-            setBusy(false);
-            alert("Đăng nhập Facebook bị huỷ");
-            return;
-          }
+  // ============ FACEBOOK (Facebook JS SDK – không qua Firebase) ============
+const loginWithFacebookSDK = async () => {
+  if (!fbReady || !window.FB) {
+    alert("Facebook SDK chưa sẵn sàng, thử lại sau vài giây.");
+    return;
+  }
+  setBusy(true);
+
+  try {
+    window.FB.login(
+      (response) => {
+        if (!response.authResponse) {
+          setBusy(false);
+          alert("Đăng nhập Facebook bị huỷ");
+          return;
+        }
+
+        window.FB.api("/me", { fields: "id,name,email,picture" }, async (userInfo) => {
           try {
-            const accessToken = response.authResponse.accessToken;
+            const payload = {
+              uid: userInfo?.id || "",
+              name: userInfo?.name || "",
+              email: userInfo?.email || "",
+              photoURL: userInfo?.picture?.data?.url || "",
+              provider: "facebook",
+            };
 
-            // bắc cầu sang Firebase để lấy Firebase ID Token
-            const cred = FacebookAuthProvider.credential(accessToken);
-            const res = await signInWithCredential(auth, cred);
+            const resp = await fetch(`${API_BASE}/api/save-user`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(payload),
+            });
 
-            const idToken = await res.user.getIdToken(true);
-            const data = await authWithBackend(idToken, "facebook");
-            console.log("Account saved:", data.user ?? data.account ?? data);
+            const data = await resp.json().catch(() => ({}));
+            if (!resp.ok) throw new Error(data?.message || "Save user failed");
+
+            if (data.token) localStorage.setItem("api_token", data.token);
+            localStorage.setItem(
+              "user",
+              JSON.stringify({ name: payload.name, email: payload.email, photo: payload.photoURL })
+            );
+
             alert("Facebook login OK");
           } catch (err) {
-            console.error("Lỗi xác thực qua Firebase:", err);
+            console.error("Lỗi lưu user Facebook:", err);
             alert("Facebook login failed");
           } finally {
             setBusy(false);
           }
-        },
-        { scope: "email,public_profile" }
-      );
-    } catch (e) {
-      console.error(e);
-      alert("Facebook login failed");
-      setBusy(false);
-    }
-  };
+        });
+      },
+      { scope: "email,public_profile" }
+    );
+  } catch (e) {
+    console.error(e);
+    alert("Facebook login failed");
+    setBusy(false);
+  }
+};
+
 
   const logout = async () => {
     localStorage.removeItem("api_token");
@@ -165,7 +188,7 @@ export default function LoginPage() {
           </div>
         ) : (
           <div className="space-y-3">
-            {/* GOOGLE */}
+            {/* GOOGLE qua Firebase (giữ nguyên flow cũ) */}
             <button
               onClick={loginWithGoogle}
               disabled={busy}
@@ -174,7 +197,7 @@ export default function LoginPage() {
               {busy ? t("loading") : t("google")}
             </button>
 
-            {/* FACEBOOK (giữ SDK, gửi như Google) */}
+            {/* FACEBOOK qua Facebook JS SDK */}
             <button
               onClick={loginWithFacebookSDK}
               disabled={busy || !fbReady}

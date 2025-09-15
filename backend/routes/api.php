@@ -5,6 +5,7 @@ use App\Http\Controllers\AuthController;
 
 Route::post('/auth/firebase', [AuthController::class, 'login']);
 use Kreait\Firebase\Auth as FirebaseAuth;
+Route::post('/save-user', [AuthController::class, 'store']);
 
 Route::get('/firebase-test', function (FirebaseAuth $auth) {
     return response()->json([
