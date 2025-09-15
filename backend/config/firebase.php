@@ -50,11 +50,7 @@ return [
              *
              */
 
-            'credentials' => [
-                'file' => env('FIREBASE_CREDENTIALS', storage_path('app/firebase/service-account.json')),
-            ],
-
-
+            'credentials' => json_decode(env('FIREBASE_CREDENTIALS_JSON'), true),
 
             /*
              * ------------------------------------------------------------------------
