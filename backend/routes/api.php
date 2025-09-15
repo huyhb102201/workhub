@@ -11,3 +11,4 @@ Route::get('/firebase-test', function (FirebaseAuth $auth) {
         'project_id' => $auth->getTenantId() ?? 'connected',
     ]);
 });
+

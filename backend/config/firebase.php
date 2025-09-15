@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 $credJson = env('FIREBASE_CREDENTIALS_JSON');
+
 return [
     /*
      * ------------------------------------------------------------------------
@@ -53,7 +54,6 @@ return [
            'credentials' => $credJson
                 ? json_decode($credJson, true)
                 : storage_path('app/firebase/service-account.json'),
-                /*
 
 
 
