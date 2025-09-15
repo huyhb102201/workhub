@@ -2,6 +2,8 @@ import { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { auth, googleProvider } from "../firebase";
 import { signInWithPopup, onAuthStateChanged, signOut } from "firebase/auth";
+import { useNavigate, useLocation } from "react-router-dom";
+
 
 // =================== ENV & API ===================
 const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000").replace(/\/$/, "");
@@ -28,7 +30,7 @@ async function authWithBackend(idToken, provider) {
 // Load Facebook SDK only once
 function useFacebookSDK() {
   const [fbReady, setFbReady] = useState(false);
-
+  
   useEffect(() => {
     if (typeof window !== "undefined" && window.FB) {
       setFbReady(true);
@@ -56,6 +58,8 @@ function useFacebookSDK() {
 }
 
 export default function LoginPage() {
+  const navigate = useNavigate();
+  const location = useLocation();
   const { t, i18n } = useTranslation();
   const [user, setUser] = useState(null); // Firebase user (Google)
   const [profile, setProfile] = useState(() => {
@@ -82,7 +86,9 @@ export default function LoginPage() {
       const idToken = await res.user.getIdToken(true);
       const data = await authWithBackend(idToken, "google");
       console.log("Account saved:", data.user ?? data.account ?? data);
-
+      if (data?.user?.id != null) {
+  localStorage.setItem("account_id", String(data.user.id));
+}
       // Đồng bộ hiển thị giống Facebook (tuỳ chọn)
       const g = {
         name: res.user.displayName || "",
@@ -92,7 +98,7 @@ export default function LoginPage() {
       localStorage.setItem("user", JSON.stringify(g));
       setProfile(g);
 
-      alert("Google login OK");
+      navigate(location.state?.from || "/", { replace: true });
     } catch (e) {
       console.error(e);
       alert("Google login failed");
@@ -135,13 +141,14 @@ export default function LoginPage() {
               if (!resp.ok) throw new Error(data?.message || "Save user failed");
 
               if (data.token) localStorage.setItem("api_token", data.token);
-
+              if (data?.user?.id != null) {
+    localStorage.setItem("account_id", String(data.user.id));
+  }
               // CẬP NHẬT STATE HIỂN THỊ NGAY TẠI ĐÂY
               const ui = { name: payload.name, email: payload.email, photo: payload.photoURL };
               localStorage.setItem("user", JSON.stringify(ui));
               setProfile(ui);
-
-              alert("Facebook login OK");
+              navigate(location.state?.from || "/", { replace: true });
             } catch (err) {
               console.error("Lỗi lưu user Facebook:", err);
               alert("Facebook login failed");
@@ -162,6 +169,7 @@ export default function LoginPage() {
   const logout = async () => {
     localStorage.removeItem("api_token");
     localStorage.removeItem("user");
+    localStorage.removeItem("account_id");
     setProfile(null);           // <— clear facebook profile
     await signOut(auth);        // <— clear firebase user (google)
     setUser(null);
@@ -173,58 +181,44 @@ export default function LoginPage() {
     : profile;
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4">
-      <div className="w-full max-w-md bg-white rounded-2xl shadow p-6 space-y-6">
-        <div className="flex justify-between items-center">
-          <h1 className="text-xl font-semibold">{t("title")}</h1>
-          <select
-            className="border rounded px-2 py-1 text-sm"
-            value={i18n.language}
-            onChange={(e) => i18n.changeLanguage(e.target.value)}
-          >
-            <option value="vi">Tiếng Việt</option>
-            <option value="en">English</option>
-          </select>
-        </div>
+  <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4">
+    <div className="w-full max-w-md bg-white rounded-2xl shadow p-6 space-y-6">
+      <div className="flex justify-between items-center">
+        <h1 className="text-xl font-semibold">{t("title")}</h1>
+        <select
+          className="border rounded px-2 py-1 text-sm"
+          value={i18n.language}
+          onChange={(e) => i18n.changeLanguage(e.target.value)}
+        >
+          <option value="vi">Tiếng Việt</option>
+          <option value="en">English</option>
+        </select>
+      </div>
 
-        <p className="text-gray-500">{t("subtitle")}</p>
+      <p className="text-gray-500">{t("subtitle")}</p>
 
-        {display ? (
-          <div className="space-y-3">
-            <div className="flex items-center gap-3">
-              <img src={display.photo ?? ""} className="h-10 w-10 rounded-full" />
-              <div className="min-w-0">
-                <div className="font-medium truncate">{display.name || "(no name)"}</div>
-                <div className="text-sm text-gray-500 truncate">{display.email || ""}</div>
-              </div>
-            </div>
-            <button onClick={logout} className="w-full rounded-lg border px-4 py-2 hover:bg-gray-50">
-              {t("logout")}
-            </button>
-          </div>
-        ) : (
-          <div className="space-y-3">
-            {/* GOOGLE qua Firebase */}
-            <button
-              onClick={loginWithGoogle}
-              disabled={busy}
-              className="w-full rounded-lg bg-red-500 text-white px-4 py-2"
-            >
-              {busy ? t("loading") : t("google")}
-            </button>
+      {/* Luôn hiển thị nút login, không show user info */}
+      <div className="space-y-3">
+        {/* GOOGLE qua Firebase */}
+        <button
+          onClick={loginWithGoogle}
+          disabled={busy}
+          className="w-full rounded-lg bg-red-500 text-white px-4 py-2"
+        >
+          {busy ? t("loading") : t("google")}
+        </button>
 
-            {/* FACEBOOK qua Facebook JS SDK */}
-            <button
-              onClick={loginWithFacebookSDK}
-              disabled={busy || !fbReady}
-              className="w-full rounded-lg bg-blue-600 text-white px-4 py-2 disabled:opacity-60"
-              title={fbReady ? "" : "Đang tải Facebook SDK..."}
-            >
-              {busy ? t("loading") : t("facebook")}
-            </button>
-          </div>
-        )}
+        {/* FACEBOOK qua Facebook JS SDK */}
+        <button
+          onClick={loginWithFacebookSDK}
+          disabled={busy || !fbReady}
+          className="w-full rounded-lg bg-blue-600 text-white px-4 py-2 disabled:opacity-60"
+          title={fbReady ? "" : "Đang tải Facebook SDK..."}
+        >
+          {busy ? t("loading") : t("facebook")}
+        </button>
       </div>
     </div>
-  );
+  </div>
+);
 }
