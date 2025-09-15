@@ -30,13 +30,10 @@ function useFacebookSDK() {
   const [fbReady, setFbReady] = useState(false);
 
   useEffect(() => {
-    // If already loaded
     if (typeof window !== "undefined" && window.FB) {
       setFbReady(true);
       return;
     }
-
-    // Prepare init callback
     window.fbAsyncInit = function () {
       window.FB.init({
         appId: FB_APP_ID,
@@ -46,8 +43,6 @@ function useFacebookSDK() {
       });
       setFbReady(true);
     };
-
-    // Inject script
     const id = "facebook-jssdk";
     if (!document.getElementById(id)) {
       const js = document.createElement("script");
@@ -55,10 +50,6 @@ function useFacebookSDK() {
       js.src = "https://connect.facebook.net/en_US/sdk.js";
       document.body.appendChild(js);
     }
-
-    return () => {
-      // không cần cleanup đặc biệt cho FB SDK
-    };
   }, []);
 
   return fbReady;
@@ -66,7 +57,15 @@ function useFacebookSDK() {
 
 export default function LoginPage() {
   const { t, i18n } = useTranslation();
-  const [user, setUser] = useState(null);
+  const [user, setUser] = useState(null); // Firebase user (Google)
+  const [profile, setProfile] = useState(() => {
+    // Facebook profile (tự quản lý)
+    try {
+      return JSON.parse(localStorage.getItem("user") || "null");
+    } catch {
+      return null;
+    }
+  });
   const [busy, setBusy] = useState(false);
   const fbReady = useFacebookSDK();
 
@@ -83,6 +82,16 @@ export default function LoginPage() {
       const idToken = await res.user.getIdToken(true);
       const data = await authWithBackend(idToken, "google");
       console.log("Account saved:", data.user ?? data.account ?? data);
+
+      // Đồng bộ hiển thị giống Facebook (tuỳ chọn)
+      const g = {
+        name: res.user.displayName || "",
+        email: res.user.email || "",
+        photo: res.user.photoURL || "",
+      };
+      localStorage.setItem("user", JSON.stringify(g));
+      setProfile(g);
+
       alert("Google login OK");
     } catch (e) {
       console.error(e);
@@ -93,71 +102,75 @@ export default function LoginPage() {
   };
 
   // ============ FACEBOOK (Facebook JS SDK – không qua Firebase) ============
-const loginWithFacebookSDK = async () => {
-  if (!fbReady || !window.FB) {
-    alert("Facebook SDK chưa sẵn sàng, thử lại sau vài giây.");
-    return;
-  }
-  setBusy(true);
-
-  try {
-    window.FB.login(
-      (response) => {
-        if (!response.authResponse) {
-          setBusy(false);
-          alert("Đăng nhập Facebook bị huỷ");
-          return;
-        }
-
-        window.FB.api("/me", { fields: "id,name,email,picture" }, async (userInfo) => {
-          try {
-            const payload = {
-              uid: userInfo?.id || "",
-              name: userInfo?.name || "",
-              email: userInfo?.email || "",
-              photoURL: userInfo?.picture?.data?.url || "",
-              provider: "facebook",
-            };
-
-            const resp = await fetch(`${API_BASE}/api/save-user`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(payload),
-            });
-
-            const data = await resp.json().catch(() => ({}));
-            if (!resp.ok) throw new Error(data?.message || "Save user failed");
-
-            if (data.token) localStorage.setItem("api_token", data.token);
-            localStorage.setItem(
-              "user",
-              JSON.stringify({ name: payload.name, email: payload.email, photo: payload.photoURL })
-            );
-
-            alert("Facebook login OK");
-          } catch (err) {
-            console.error("Lỗi lưu user Facebook:", err);
-            alert("Facebook login failed");
-          } finally {
+  const loginWithFacebookSDK = async () => {
+    if (!fbReady || !window.FB) {
+      alert("Facebook SDK chưa sẵn sàng, thử lại sau vài giây.");
+      return;
+    }
+    setBusy(true);
+    try {
+      window.FB.login(
+        (response) => {
+          if (!response.authResponse) {
             setBusy(false);
+            alert("Đăng nhập Facebook bị huỷ");
+            return;
           }
-        });
-      },
-      { scope: "email,public_profile" }
-    );
-  } catch (e) {
-    console.error(e);
-    alert("Facebook login failed");
-    setBusy(false);
-  }
-};
+          window.FB.api("/me", { fields: "id,name,email,picture" }, async (userInfo) => {
+            try {
+              const payload = {
+                uid: userInfo?.id || "",
+                name: userInfo?.name || "",
+                email: userInfo?.email || "",
+                photoURL: userInfo?.picture?.data?.url || "",
+                provider: "facebook",
+              };
 
+              const resp = await fetch(SAVE_USER_URL, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload),
+              });
+              const data = await resp.json().catch(() => ({}));
+              if (!resp.ok) throw new Error(data?.message || "Save user failed");
+
+              if (data.token) localStorage.setItem("api_token", data.token);
+
+              // CẬP NHẬT STATE HIỂN THỊ NGAY TẠI ĐÂY
+              const ui = { name: payload.name, email: payload.email, photo: payload.photoURL };
+              localStorage.setItem("user", JSON.stringify(ui));
+              setProfile(ui);
+
+              alert("Facebook login OK");
+            } catch (err) {
+              console.error("Lỗi lưu user Facebook:", err);
+              alert("Facebook login failed");
+            } finally {
+              setBusy(false);
+            }
+          });
+        },
+        { scope: "email,public_profile" }
+      );
+    } catch (e) {
+      console.error(e);
+      alert("Facebook login failed");
+      setBusy(false);
+    }
+  };
 
   const logout = async () => {
     localStorage.removeItem("api_token");
     localStorage.removeItem("user");
-    await signOut(auth);
+    setProfile(null);           // <— clear facebook profile
+    await signOut(auth);        // <— clear firebase user (google)
+    setUser(null);
   };
+
+  // ----- UI hiển thị: ưu tiên Firebase user (Google), nếu không có thì dùng profile (Facebook) -----
+  const display = user
+    ? { name: user.displayName, email: user.email, photo: user.photoURL }
+    : profile;
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4">
@@ -176,11 +189,14 @@ const loginWithFacebookSDK = async () => {
 
         <p className="text-gray-500">{t("subtitle")}</p>
 
-        {user ? (
+        {display ? (
           <div className="space-y-3">
             <div className="flex items-center gap-3">
-              <img src={user.photoURL ?? ""} className="h-10 w-10 rounded-full" />
-              <div>{user.displayName}</div>
+              <img src={display.photo ?? ""} className="h-10 w-10 rounded-full" />
+              <div className="min-w-0">
+                <div className="font-medium truncate">{display.name || "(no name)"}</div>
+                <div className="text-sm text-gray-500 truncate">{display.email || ""}</div>
+              </div>
             </div>
             <button onClick={logout} className="w-full rounded-lg border px-4 py-2 hover:bg-gray-50">
               {t("logout")}
@@ -188,7 +204,7 @@ const loginWithFacebookSDK = async () => {
           </div>
         ) : (
           <div className="space-y-3">
-            {/* GOOGLE qua Firebase (giữ nguyên flow cũ) */}
+            {/* GOOGLE qua Firebase */}
             <button
               onClick={loginWithGoogle}
               disabled={busy}
